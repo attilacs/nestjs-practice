@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { UserResponseDto } from './dto/user-response.dto';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -16,7 +16,8 @@ export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) { }
+    private dataSource: DataSource,
+  ) {}
 
   private readonly SALT_ROUNDS = 8;
 
@@ -33,6 +34,46 @@ export class UserService {
       return response;
     } catch {
       throw new InternalServerErrorException('Failed to create user');
+    }
+  }
+
+  async createMany(createUserDtos: CreateUserDto[]): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      for (const createUserDto of createUserDtos) {
+        const hashedPassword = await this.hashPassword(createUserDto.password);
+        const user = this.userRepository.create({
+          username: createUserDto.username,
+          password: hashedPassword,
+        });
+        await queryRunner.manager.save(user);
+      }
+      await queryRunner.commitTransaction();
+    } catch {
+      await queryRunner.rollbackTransaction();
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async createMany2(createUserDtos: CreateUserDto[]): Promise<void> {
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        for (const createUserDto of createUserDtos) {
+          const hashedPassword = await this.hashPassword(
+            createUserDto.password,
+          );
+          const user = this.userRepository.create({
+            username: createUserDto.username,
+            password: hashedPassword,
+          });
+          await manager.save(user);
+        }
+      });
+    } catch {
+      throw new InternalServerErrorException('Transaction failed');
     }
   }
 
